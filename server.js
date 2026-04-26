@@ -7,32 +7,32 @@ const crypto = require('crypto');
 const app = express();
 const PORT = process.env.PORT || 3000;
 const BOT_TOKEN = process.env.BOT_TOKEN;
-const FRONTEND_URL = process.env.FRONTEND_URL;
-const WEBHOOK_URL = process.env.WEBHOOK_URL;
+
+// ✅ Real URLs ထည့်ထားပြီ
+const FRONTEND_URL = process.env.FRONTEND_URL || 'https://ponzifrontend.vercel.app';
+const WEBHOOK_URL  = process.env.WEBHOOK_URL  || 'https://ponzibackend.onrender.com';
 
 // ═══════════════════════════════════════════
-//  Middleware Setup
+//  Middleware
 // ═══════════════════════════════════════════
 app.use(express.json());
 app.use(cors({
-  origin: FRONTEND_URL,
-  methods: ['GET', 'POST'],
+  origin: ['https://ponzifrontend.vercel.app', 'http://localhost:3000'],
+  methods: ['GET', 'POST', 'OPTIONS'],
   credentials: true
 }));
 
 // ═══════════════════════════════════════════
-//  Telegram Bot Setup (Webhook Mode)
+//  Telegram Bot (Webhook Mode)
 // ═══════════════════════════════════════════
 const bot = new TelegramBot(BOT_TOKEN, { webHook: true });
-
 const webhookPath = `/webhook/${BOT_TOKEN}`;
 
-// Render deploy ပြီးတာနဲ့ webhook ကို auto set လုပ်ပေးတယ်
 bot.setWebHook(`${WEBHOOK_URL}${webhookPath}`)
-  .then(() => console.log('✅ Webhook set successfully'))
+  .then(() => console.log(`✅ Webhook set: ${WEBHOOK_URL}${webhookPath}`))
   .catch(err => console.error('❌ Webhook error:', err.message));
 
-// Telegram က update တွေကို ဒီ endpoint ကနေ ပို့လာမယ်
+// Telegram က update ပို့လာတဲ့ endpoint
 app.post(webhookPath, (req, res) => {
   bot.processUpdate(req.body);
   res.sendStatus(200);
@@ -42,155 +42,140 @@ app.post(webhookPath, (req, res) => {
 //  Bot Commands
 // ═══════════════════════════════════════════
 
-// /start command - User က bot ကို စတင် message ပို့တာနဲ့ trigger ဖြစ်မယ်
+// /start command
 bot.onText(/\/start/, async (msg) => {
-  const chatId = msg.chat.id;
+  const chatId    = msg.chat.id;
   const firstName = msg.from.first_name || 'User';
-  const username = msg.from.username ? `@${msg.from.username}` : '';
+  const username  = msg.from.username ? `@${msg.from.username}` : '';
 
-  const welcomeText = 
+  const text =
     `👋 မင်္ဂလာပါ ${firstName}! ${username}\n\n` +
     `🚀 ကျွန်တော်တို့ရဲ့ Mini App ထဲသို့ ကြိုဆိုပါတယ်။\n\n` +
     `အောက်ပါ button ကို နှိပ်ပြီး Website ထဲ ဝင်ရောက်နိုင်ပါတယ်။`;
 
   try {
-    await bot.sendMessage(chatId, welcomeText, {
+    await bot.sendMessage(chatId, text, {
       reply_markup: {
         inline_keyboard: [
           [
             {
               text: '🌐 Website သို့ ဝင်ရန်',
-              web_app: { url: FRONTEND_URL }
+              web_app: { url: 'https://ponzifrontend.vercel.app' }
             }
           ],
           [
             {
-              text: '📞 Support',
-              url: 'https://t.me/your_support_username' // သင့် support username ထည့်ပါ
+              text: '💬 Support',
+              url: 'https://t.me/your_support_username' // ← သင့် support ထည့်ပါ
             }
           ]
         ]
       }
     });
   } catch (err) {
-    console.error('Send message error:', err.message);
+    console.error('sendMessage error:', err.message);
   }
 });
 
 // /help command
 bot.onText(/\/help/, async (msg) => {
-  const chatId = msg.chat.id;
-  await bot.sendMessage(chatId,
+  await bot.sendMessage(msg.chat.id,
     `📋 အကူအညီ\n\n` +
     `/start - Bot စတင်ရန်\n` +
-    `/help - အကူအညီ ကြည့်ရန်\n\n` +
-    `Website သို့ ဝင်ရောက်ရန် /start ကို နှိပ်ပါ။`
+    `/help  - အကူအညီ ကြည့်ရန်\n\n` +
+    `Website: https://ponzifrontend.vercel.app`
   );
 });
 
 // ═══════════════════════════════════════════
-//  API Endpoints
+//  REST API Endpoints
 // ═══════════════════════════════════════════
 
-// Health Check - Server အလုပ်လုပ်နေကြောင်း စစ်ဆေးရန်
-app.get('/health', (req, res) => {
-  res.json({
-    status: 'ok',
-    message: 'Server is running',
-    timestamp: new Date().toISOString()
-  });
+// Health check
+app.get('/', (req, res) => {
+  res.json({ status: 'ok', message: 'Ponzi Backend is running 🚀', timestamp: new Date().toISOString() });
 });
 
-// initData Validation API
-// Frontend က Telegram initData ကို ဒီမှာ ပို့ပြီး စစ်ဆေးမယ်
+app.get('/health', (req, res) => {
+  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+});
+
+// ─────────────────────────────────────────
+//  Telegram initData Validation
+// ─────────────────────────────────────────
 app.post('/api/validate', (req, res) => {
   const { initData } = req.body;
 
   if (!initData) {
-    return res.status(400).json({
-      valid: false,
-      error: 'initData မပါဘူး'
-    });
+    return res.status(400).json({ valid: false, error: 'initData မပါဘူး' });
   }
 
   try {
     const isValid = validateTelegramInitData(initData, BOT_TOKEN);
 
     if (!isValid) {
-      return res.status(401).json({
-        valid: false,
-        error: 'initData မှားယွင်းနေသည် - Unauthorized'
-      });
+      return res.status(401).json({ valid: false, error: 'Unauthorized - initData မမှန်ပါ' });
     }
 
-    // User data parse လုပ်မယ်
-    const params = new URLSearchParams(initData);
+    const params  = new URLSearchParams(initData);
     const userStr = params.get('user');
-    const user = userStr ? JSON.parse(userStr) : null;
-    const authDate = params.get('auth_date');
+    const user    = userStr ? JSON.parse(userStr) : null;
 
     return res.json({
       valid: true,
       user: {
-        id: user?.id,
-        first_name: user?.first_name,
-        last_name: user?.last_name,
-        username: user?.username,
+        id:            user?.id,
+        first_name:    user?.first_name,
+        last_name:     user?.last_name,
+        username:      user?.username,
         language_code: user?.language_code,
-        is_premium: user?.is_premium || false
+        is_premium:    user?.is_premium || false
       },
-      auth_date: authDate
+      auth_date: params.get('auth_date')
     });
 
-  } catch (error) {
-    console.error('Validation error:', error);
-    return res.status(500).json({
-      valid: false,
-      error: 'Server error ဖြစ်သွားသည်'
-    });
+  } catch (err) {
+    console.error('Validation error:', err);
+    return res.status(500).json({ valid: false, error: 'Server error' });
   }
 });
 
-// Example: User Profile save/get API (Optional - Database ချိတ်ဆက်လိုက သုံးနိုင်)
+// ─────────────────────────────────────────
+//  User save API (Optional - DB ချိတ်မယ်ဆိုသုံးပါ)
+// ─────────────────────────────────────────
 app.post('/api/user/save', (req, res) => {
   const { initData, extraData } = req.body;
 
-  const isValid = validateTelegramInitData(initData, BOT_TOKEN);
-  if (!isValid) {
+  if (!validateTelegramInitData(initData, BOT_TOKEN)) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
 
-  // ဒီနေရာမှာ Database (MongoDB, PostgreSQL, etc.) သိမ်းနိုင်တယ်
-  // ယခု demo အတွက် success ပြန်ပေးတယ်
-  res.json({ success: true, message: 'User data saved successfully' });
+  // ဒီနေရာ MongoDB / PostgreSQL / Firebase etc. ထည့်နိုင်
+  console.log('User saved:', extraData);
+  res.json({ success: true, message: 'Saved successfully' });
 });
 
 // ═══════════════════════════════════════════
-//  Telegram initData Validation Function
-//  Telegram Official Documentation အတိုင်း
+//  HMAC-SHA256 Validation (Telegram Official)
 // ═══════════════════════════════════════════
 function validateTelegramInitData(initData, botToken) {
   try {
     const params = new URLSearchParams(initData);
-    const hash = params.get('hash');
-
+    const hash   = params.get('hash');
     if (!hash) return false;
 
     params.delete('hash');
 
-    // Alphabetical order နဲ့ sort လုပ်မယ်
     const dataCheckString = Array.from(params.entries())
       .sort(([a], [b]) => a.localeCompare(b))
-      .map(([key, value]) => `${key}=${value}`)
+      .map(([k, v]) => `${k}=${v}`)
       .join('\n');
 
-    // Secret key ဆောက်မယ် - "WebAppData" သည် Telegram specification
     const secretKey = crypto
       .createHmac('sha256', 'WebAppData')
       .update(botToken)
       .digest();
 
-    // Hash တွက်ပြီး compare လုပ်မယ်
     const calculatedHash = crypto
       .createHmac('sha256', secretKey)
       .update(dataCheckString)
@@ -203,10 +188,10 @@ function validateTelegramInitData(initData, botToken) {
 }
 
 // ═══════════════════════════════════════════
-//  Server Start
+//  Start Server
 // ═══════════════════════════════════════════
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
-  console.log(`📡 Webhook path: ${webhookPath}`);
-  console.log(`🌐 Frontend URL: ${FRONTEND_URL}`);
+  console.log(`🌐 Frontend : https://ponzifrontend.vercel.app`);
+  console.log(`📡 Backend  : https://ponzibackend.onrender.com`);
 });

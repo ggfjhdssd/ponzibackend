@@ -1,7 +1,7 @@
 {
-  "name": "telegram-mini-app-backend",
+  "name": "ponzi-backend",
   "version": "1.0.0",
-  "description": "Telegram Mini App Backend - Node.js + Express",
+  "description": "Telegram Mini App Backend",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
@@ -18,7 +18,5 @@
   },
   "engines": {
     "node": ">=18.0.0"
-  },
-  "author": "",
-  "license": "MIT"
+  }
 }
