@@ -1,197 +1,260 @@
-require('dotenv').config();
-const express = require('express');
-const TelegramBot = require('node-telegram-bot-api');
-const cors = require('cors');
-const crypto = require('crypto');
+// ================================================
+//   Telegram Mini App - Backend (All-in-One)
+//   File   : server.js
+//   Deploy : Render.com
+//   URL    : https://ponzibackend.onrender.com
+// ================================================
+
+// ── Load .env (local dev only; on Render use Dashboard env vars) ──
+require("dotenv").config();
+
+// ── Core Dependencies ──────────────────────────
+const express    = require("express");
+const cors       = require("cors");
+const TelegramBot = require("node-telegram-bot-api");
 
 const app = express();
-const PORT = process.env.PORT || 3000;
-const BOT_TOKEN = process.env.BOT_TOKEN;
 
-// ✅ Real URLs ထည့်ထားပြီ
-const FRONTEND_URL = process.env.FRONTEND_URL || 'https://ponzifrontend.vercel.app';
-const WEBHOOK_URL  = process.env.WEBHOOK_URL  || 'https://ponzibackend.onrender.com';
+// ================================================
+//   ENVIRONMENT VARIABLES
+//   Set these in Render Dashboard → Environment
+// ================================================
+const BOT_TOKEN    = process.env.BOT_TOKEN;          // Required
+const FRONTEND_URL = process.env.FRONTEND_URL || "https://ponzifrontend.vercel.app/";
+const ADMIN_KEY    = process.env.ADMIN_KEY    || "changeme";
+const PORT         = process.env.PORT         || 3000;
 
-// ═══════════════════════════════════════════
-//  Middleware
-// ═══════════════════════════════════════════
-app.use(express.json());
+if (!BOT_TOKEN) {
+  console.error("❌  BOT_TOKEN မသတ်မှတ်ရသေး! Render Environment Variables ထဲ ထည့်ပါ။");
+  process.exit(1);
+}
+
+// ================================================
+//   MIDDLEWARE
+// ================================================
 app.use(cors({
-  origin: ['https://ponzifrontend.vercel.app', 'http://localhost:3000'],
-  methods: ['GET', 'POST', 'OPTIONS'],
-  credentials: true
+  origin: "*",                                        // Vercel frontend ကို ခွင့်ပြုသည်
+  methods: ["GET", "POST", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization", "x-admin-key"],
 }));
+app.use(express.json());
 
-// ═══════════════════════════════════════════
-//  Telegram Bot (Webhook Mode)
-// ═══════════════════════════════════════════
-const bot = new TelegramBot(BOT_TOKEN, { webHook: true });
-const webhookPath = `/webhook/${BOT_TOKEN}`;
-
-bot.setWebHook(`${WEBHOOK_URL}${webhookPath}`)
-  .then(() => console.log(`✅ Webhook set: ${WEBHOOK_URL}${webhookPath}`))
-  .catch(err => console.error('❌ Webhook error:', err.message));
-
-// Telegram က update ပို့လာတဲ့ endpoint
-app.post(webhookPath, (req, res) => {
-  bot.processUpdate(req.body);
-  res.sendStatus(200);
+// ── Request Logger ──────────────────────────────
+app.use((req, _res, next) => {
+  console.log(`[${new Date().toISOString()}] ${req.method} ${req.path}`);
+  next();
 });
 
-// ═══════════════════════════════════════════
-//  Bot Commands
-// ═══════════════════════════════════════════
+// ================================================
+//   IN-MEMORY DATA STORE
+//   Production မှာ MongoDB / PostgreSQL နဲ့ အစားထိုးပါ
+// ================================================
+const users = new Map();      // key: telegram_id (Number)
+const tasks = new Map();      // key: telegram_id → task array (future use)
 
-// /start command
-bot.onText(/\/start/, async (msg) => {
+// Helper: get or create user
+function getUser(telegram_id) {
+  return users.get(Number(telegram_id)) || null;
+}
+
+// ================================================
+//   TELEGRAM BOT SETUP
+// ================================================
+const bot = new TelegramBot(BOT_TOKEN, { polling: true });
+console.log("🤖  Telegram Bot စတင်နေပြီ (polling mode)...");
+
+// ── /start Command ──────────────────────────────
+bot.onText(/\/start/, (msg) => {
   const chatId    = msg.chat.id;
-  const firstName = msg.from.first_name || 'User';
-  const username  = msg.from.username ? `@${msg.from.username}` : '';
+  const firstName = msg.from?.first_name || "မိတ်ဆွေ";
 
-  const text =
-    `👋 မင်္ဂလာပါ ${firstName}! ${username}\n\n` +
-    `🚀 ကျွန်တော်တို့ရဲ့ Mini App ထဲသို့ ကြိုဆိုပါတယ်။\n\n` +
-    `အောက်ပါ button ကို နှိပ်ပြီး Website ထဲ ဝင်ရောက်နိုင်ပါတယ်။`;
+  // Auto-register from bot side
+  if (msg.from) {
+    const uid = msg.from.id;
+    if (!users.has(uid)) {
+      users.set(uid, {
+        telegram_id: uid,
+        username:    msg.from.username   || "",
+        first_name:  msg.from.first_name || "",
+        last_name:   msg.from.last_name  || "",
+        balance:     0,
+        commission:  0,
+        joined_at:   new Date().toISOString(),
+        last_seen:   new Date().toISOString(),
+      });
+      console.log(`✅  New user registered via /start: ${uid}`);
+    } else {
+      // Update last seen
+      const u = users.get(uid);
+      u.last_seen = new Date().toISOString();
+      users.set(uid, u);
+    }
+  }
 
-  try {
-    await bot.sendMessage(chatId, text, {
-      reply_markup: {
-        inline_keyboard: [
-          [
-            {
-              text: '🌐 Website သို့ ဝင်ရန်',
-              web_app: { url: 'https://ponzifrontend.vercel.app' }
-            }
-          ],
-          [
-            {
-              text: '💬 Support',
-              url: 'https://t.me/your_support_username' // ← သင့် support ထည့်ပါ
-            }
-          ]
-        ]
-      }
-    });
-  } catch (err) {
-    console.error('sendMessage error:', err.message);
+  const welcomeText =
+    `👋 မင်္ဂလာပါ, ${firstName}!\n\n` +
+    `🛍️  Best Buy Mini App မှ ကြိုဆိုပါသည်\n\n` +
+    `✅  Commission များ ရရှိနိုင်သည်\n` +
+    `💰  ငွေများ လွယ်ကူစွာ ထုတ်ယူနိုင်သည်\n` +
+    `👥  မိတ်ဆွေများ ဖိတ်ကာ Bonus ရနိုင်သည်\n\n` +
+    `👇  အောက်ပါ ခလုတ်ကို နှိပ်ပြီး App ဝင်ရောက်ပါ!`;
+
+  bot.sendMessage(chatId, welcomeText, {
+    reply_markup: {
+      inline_keyboard: [[
+        {
+          text:    "🌐  Website သို့ ဝင်ရန်",
+          web_app: { url: FRONTEND_URL },
+        },
+      ]],
+    },
+  });
+});
+
+// ── /balance Command ────────────────────────────
+bot.onText(/\/balance/, (msg) => {
+  const chatId = msg.chat.id;
+  const user   = getUser(msg.from?.id);
+  if (user) {
+    bot.sendMessage(chatId,
+      `💰  လက်ကျန်ငွေ: $${user.balance.toFixed(2)}\n` +
+      `📈  Commission: $${user.commission.toFixed(2)}`
+    );
+  } else {
+    bot.sendMessage(chatId, "❌  /start နှိပ်ပြီး အရင် မှတ်ပုံတင်ပါ။");
   }
 });
 
-// /help command
-bot.onText(/\/help/, async (msg) => {
-  await bot.sendMessage(msg.chat.id,
-    `📋 အကူအညီ\n\n` +
-    `/start - Bot စတင်ရန်\n` +
-    `/help  - အကူအညီ ကြည့်ရန်\n\n` +
-    `Website: https://ponzifrontend.vercel.app`
+// ── /stats Command (Admin) ──────────────────────
+bot.onText(/\/stats/, (msg) => {
+  const chatId     = msg.chat.id;
+  const adminIds   = (process.env.ADMIN_IDS || "").split(",").map(Number);
+  const isAdmin    = adminIds.includes(msg.from?.id);
+
+  if (!isAdmin && adminIds.length > 0) {
+    return bot.sendMessage(chatId, "❌  ဤ Command ကို Admin သာ သုံးနိုင်သည်။");
+  }
+
+  bot.sendMessage(chatId,
+    `📊  Server Stats\n\n` +
+    `👤  Users: ${users.size}\n` +
+    `🕐  Time:  ${new Date().toISOString()}`
   );
 });
 
-// ═══════════════════════════════════════════
-//  REST API Endpoints
-// ═══════════════════════════════════════════
-
-// Health check
-app.get('/', (req, res) => {
-  res.json({ status: 'ok', message: 'Ponzi Backend is running 🚀', timestamp: new Date().toISOString() });
-});
-
-app.get('/health', (req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString() });
-});
-
-// ─────────────────────────────────────────
-//  Telegram initData Validation
-// ─────────────────────────────────────────
-app.post('/api/validate', (req, res) => {
-  const { initData } = req.body;
-
-  if (!initData) {
-    return res.status(400).json({ valid: false, error: 'initData မပါဘူး' });
-  }
-
-  try {
-    const isValid = validateTelegramInitData(initData, BOT_TOKEN);
-
-    if (!isValid) {
-      return res.status(401).json({ valid: false, error: 'Unauthorized - initData မမှန်ပါ' });
-    }
-
-    const params  = new URLSearchParams(initData);
-    const userStr = params.get('user');
-    const user    = userStr ? JSON.parse(userStr) : null;
-
-    return res.json({
-      valid: true,
-      user: {
-        id:            user?.id,
-        first_name:    user?.first_name,
-        last_name:     user?.last_name,
-        username:      user?.username,
-        language_code: user?.language_code,
-        is_premium:    user?.is_premium || false
-      },
-      auth_date: params.get('auth_date')
-    });
-
-  } catch (err) {
-    console.error('Validation error:', err);
-    return res.status(500).json({ valid: false, error: 'Server error' });
+// ── Unknown messages ────────────────────────────
+bot.on("message", (msg) => {
+  if (msg.text && !msg.text.startsWith("/") && !msg.web_app_data) {
+    bot.sendMessage(msg.chat.id, "👆  /start ကို နှိပ်ပြီး App ကို ဖွင့်ပါ။");
   }
 });
 
-// ─────────────────────────────────────────
-//  User save API (Optional - DB ချိတ်မယ်ဆိုသုံးပါ)
-// ─────────────────────────────────────────
-app.post('/api/user/save', (req, res) => {
-  const { initData, extraData } = req.body;
-
-  if (!validateTelegramInitData(initData, BOT_TOKEN)) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
-
-  // ဒီနေရာ MongoDB / PostgreSQL / Firebase etc. ထည့်နိုင်
-  console.log('User saved:', extraData);
-  res.json({ success: true, message: 'Saved successfully' });
+// ── Polling error handler ───────────────────────
+bot.on("polling_error", (err) => {
+  console.error("Polling error:", err.message);
 });
 
-// ═══════════════════════════════════════════
-//  HMAC-SHA256 Validation (Telegram Official)
-// ═══════════════════════════════════════════
-function validateTelegramInitData(initData, botToken) {
-  try {
-    const params = new URLSearchParams(initData);
-    const hash   = params.get('hash');
-    if (!hash) return false;
+// ================================================
+//   REST API ROUTES
+// ================================================
 
-    params.delete('hash');
+// ── Health Check ────────────────────────────────
+app.get("/", (_req, res) => {
+  res.json({
+    status:    "✅ Server is running",
+    app:       "Best Buy Mini App Backend",
+    users:     users.size,
+    timestamp: new Date().toISOString(),
+  });
+});
 
-    const dataCheckString = Array.from(params.entries())
-      .sort(([a], [b]) => a.localeCompare(b))
-      .map(([k, v]) => `${k}=${v}`)
-      .join('\n');
+// ── POST /api/user/register ─────────────────────
+//    Frontend Mini App မှ ခေါ်သည် (user ပွင့်တာနဲ့)
+app.post("/api/user/register", (req, res) => {
+  const { telegram_id, username, first_name, last_name } = req.body;
 
-    const secretKey = crypto
-      .createHmac('sha256', 'WebAppData')
-      .update(botToken)
-      .digest();
-
-    const calculatedHash = crypto
-      .createHmac('sha256', secretKey)
-      .update(dataCheckString)
-      .digest('hex');
-
-    return calculatedHash === hash;
-  } catch {
-    return false;
+  if (!telegram_id) {
+    return res.status(400).json({ error: "telegram_id လိုအပ်သည်" });
   }
-}
 
-// ═══════════════════════════════════════════
-//  Start Server
-// ═══════════════════════════════════════════
+  const uid = Number(telegram_id);
+
+  if (users.has(uid)) {
+    // Update existing
+    const u = users.get(uid);
+    u.username    = username    || u.username;
+    u.first_name  = first_name  || u.first_name;
+    u.last_name   = last_name   || u.last_name;
+    u.last_seen   = new Date().toISOString();
+    users.set(uid, u);
+    return res.json({ success: true, message: "updated", user: u });
+  }
+
+  // New user
+  const newUser = {
+    telegram_id: uid,
+    username:    username    || "",
+    first_name:  first_name  || "",
+    last_name:   last_name   || "",
+    balance:     0,
+    commission:  0,
+    joined_at:   new Date().toISOString(),
+    last_seen:   new Date().toISOString(),
+  };
+  users.set(uid, newUser);
+  console.log(`✅  New user via Mini App: ${uid} (@${username})`);
+  return res.json({ success: true, message: "registered", user: newUser });
+});
+
+// ── GET /api/user/:id/balance ───────────────────
+app.get("/api/user/:id/balance", (req, res) => {
+  const user = getUser(req.params.id);
+  if (!user) return res.status(404).json({ error: "User မတွေ့ပါ" });
+  res.json({ success: true, balance: user.balance, commission: user.commission });
+});
+
+// ── GET /api/user/:id ───────────────────────────
+app.get("/api/user/:id", (req, res) => {
+  const user = getUser(req.params.id);
+  if (!user) return res.status(404).json({ error: "User မတွေ့ပါ" });
+  res.json({ success: true, user });
+});
+
+// ── POST /api/user/:id/topup (Admin) ───────────
+app.post("/api/user/:id/topup", (req, res) => {
+  if (req.headers["x-admin-key"] !== ADMIN_KEY) {
+    return res.status(403).json({ error: "Forbidden" });
+  }
+  const user = getUser(req.params.id);
+  if (!user) return res.status(404).json({ error: "User မတွေ့ပါ" });
+
+  const amount = Number(req.body.amount) || 0;
+  user.balance += amount;
+  user.commission += amount;
+  users.set(user.telegram_id, user);
+
+  res.json({ success: true, new_balance: user.balance });
+});
+
+// ── GET /api/admin/users (Admin) ────────────────
+app.get("/api/admin/users", (req, res) => {
+  if (req.headers["x-admin-key"] !== ADMIN_KEY) {
+    return res.status(403).json({ error: "Forbidden" });
+  }
+  const list = Array.from(users.values());
+  res.json({ success: true, count: list.length, users: list });
+});
+
+// ── 404 fallback ────────────────────────────────
+app.use((_req, res) => {
+  res.status(404).json({ error: "Route မတွေ့ပါ" });
+});
+
+// ================================================
+//   START SERVER
+// ================================================
 app.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`);
-  console.log(`🌐 Frontend : https://ponzifrontend.vercel.app`);
-  console.log(`📡 Backend  : https://ponzibackend.onrender.com`);
+  console.log(`🚀  Server running → http://localhost:${PORT}`);
+  console.log(`📱  Frontend URL  → ${FRONTEND_URL}`);
+  console.log(`🌐  Backend URL   → https://ponzibackend.onrender.com`);
 });

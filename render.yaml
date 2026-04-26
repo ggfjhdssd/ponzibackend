@@ -2,21 +2,19 @@ services:
   - type: web
     name: ponzibackend
     env: node
-    region: singapore
     plan: free
     buildCommand: npm install
-    startCommand: node server.js
-    healthCheckPath: /health
-
+    startCommand: npm start
     envVars:
       - key: BOT_TOKEN
         sync: false
-
       - key: FRONTEND_URL
-        value: https://ponzifrontend.vercel.app
-
-      - key: WEBHOOK_URL
-        value: https://ponzibackend.onrender.com
-
-      - key: PORT
-        value: 3000
+        value: https://ponzifrontend.vercel.app/
+      - key: ADMIN_KEY
+        sync: false
+      - key: ADMIN_IDS
+        sync: false
+      - key: NODE_ENV
+        value: production
+    healthCheckPath: /
+    autoDeploy: true

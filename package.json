@@ -1,5 +1,5 @@
 {
-  "name": "ponzi-backend",
+  "name": "bestbuy-miniapp-backend",
   "version": "1.0.0",
   "description": "Telegram Mini App Backend",
   "main": "server.js",
@@ -14,9 +14,10 @@
     "node-telegram-bot-api": "^0.64.0"
   },
   "devDependencies": {
-    "nodemon": "^3.0.1"
+    "nodemon": "^3.0.2"
   },
   "engines": {
     "node": ">=18.0.0"
-  }
+  },
+  "license": "MIT"
 }
