@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: telegram-mini-app-backend
+    env: node
+    region: singapore          # Asia နားရှိတဲ့ region ရွေးချယ်ပါ
+    plan: free                 # Free plan သုံးမယ်
+    buildCommand: npm install
+    startCommand: node server.js
+    healthCheckPath: /health   # Health check endpoint
+
+    envVars:
+      - key: BOT_TOKEN
+        sync: false            # Render Dashboard မှာ manually ထည့်မယ်
+
+      - key: FRONTEND_URL
+        sync: false            # Vercel URL - manually ထည့်မယ်
+
+      - key: WEBHOOK_URL
+        sync: false            # Render ရဲ့ URL - manually ထည့်မယ်
+
+      - key: PORT
+        value: 3000            # Render က auto assign လုပ်ပေမယ့် default ထားပါ
