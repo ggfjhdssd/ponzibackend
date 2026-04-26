@@ -1,20 +1,19 @@
 services:
   - type: web
-    name: ponzibackend
-    env: node
-    plan: free
+    name: bestbuy-backend
+    runtime: node
     buildCommand: npm install
     startCommand: npm start
     envVars:
       - key: BOT_TOKEN
         sync: false
       - key: FRONTEND_URL
-        value: https://ponzifrontend.vercel.app/
+        sync: false
       - key: ADMIN_KEY
         sync: false
       - key: ADMIN_IDS
         sync: false
-      - key: NODE_ENV
-        value: production
-    healthCheckPath: /
-    autoDeploy: true
+      - key: MONGO_URI
+        sync: false
+      - key: PORT
+        value: 3000
