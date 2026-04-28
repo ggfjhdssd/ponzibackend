@@ -114,7 +114,7 @@ function generateProducts() {
     const price = Math.floor(Math.random() * (4500 - 2000 + 1) + 2000);
     lv1.push({
       id:    `p${i}`,
-      image: `/public/p${i}.png`,
+      image: `images/p${i}.png`,
       price,
       level: 1,
       commission: Math.round(price * 0.1),
@@ -125,7 +125,7 @@ function generateProducts() {
     const price = Math.floor(Math.random() * (45000 - 20000 + 1) + 20000);
     lv2.push({
       id:    `p${i}`,
-      image: `/public/p${i}.png`,
+      image: `images/p${i}.png`,
       price,
       level: 2,
       commission: Math.round(price * 0.1),
@@ -139,7 +139,7 @@ function generateProducts() {
 // ================================================
 const VIP_PRICES = {
   1: 5000,
-  2: 50000,
+  2: 20000,
 };
 
 // ================================================
