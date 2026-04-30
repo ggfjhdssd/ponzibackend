@@ -52,6 +52,25 @@ async function initDB() {
       await client.connect();
       db = client.db("wealthflow");
       console.log("✅  MongoDB ချိတ်ဆက်ပြီး!");
+
+      // ── TTL Index: grab_history auto-delete after 3 days (259200s) ──
+      await db.collection("grab_history").createIndex(
+        { "createdAt": 1 },
+        { expireAfterSeconds: 259200 }
+      ).catch(e => console.log("TTL index grab_history:", e.message));
+
+      // ── TTL Index: deposits auto-delete after 10 days (864000s) ──
+      await db.collection("deposits").createIndex(
+        { "createdAt": 1 },
+        { expireAfterSeconds: 864000 }
+      ).catch(e => console.log("TTL index deposits:", e.message));
+
+      // ── Index: users by telegram_id for fast lookup ──
+      await db.collection("users").createIndex(
+        { "telegram_id": 1 }, { unique: true }
+      ).catch(e => console.log("Users index:", e.message));
+
+      console.log("✅  Indexes created (TTL + user)");
     } catch (err) {
       console.warn("⚠️  MongoDB မချိတ်နိုင်:", err.message);
       db = null;
@@ -65,6 +84,9 @@ const usersMap    = new Map();
 const depositsMap = new Map();
 const withdrawMap = new Map();
 const spinsMap    = new Map();
+
+// ── Race Condition Prevention: track in-progress grab requests ──
+const grabLocks = new Set();
 
 async function dbGetUser(telegram_id) {
   const uid = Number(telegram_id);
@@ -552,58 +574,107 @@ app.post("/api/buy-vip", async (req, res) => {
   return res.json({ success: true, vip_level: user.vip_level, new_balance: user.balance, cost });
 });
 
-// ─── Order Grab ───────────────────────────────────
+// ─── Order Grab v8 ─────────────────────────────────────────────
+//  • Balance CHECK only (price မနှုတ်) — Commission ပဲ ထည့်
+//  • Race Condition: grabLocks Set ဖြင့် ကာကွယ်
+//  • Max 20 history per user (storage optimization)
+//  • TTL collection: grab_history auto-delete after 3 days
+// ───────────────────────────────────────────────────────────────
 app.post("/api/order/grab", async (req, res) => {
   const { telegram_id } = req.body;
   if (!telegram_id) return res.status(400).json({ error: "telegram_id လိုအပ်" });
 
-  const user = await dbGetUser(telegram_id);
-  if (!user)        return res.status(404).json({ error: "User မတွေ့ပါ" });
-  if (user.banned)  return res.status(403).json({ error: "အကောင့် ပိတ်ဆို့ထားသည်" });
-  if (!user.vip_level) return res.status(403).json({ error: "VIP ဝယ်ယူမှသာ Grab လုပ်နိုင်" });
+  const uid = Number(telegram_id);
 
-  const today = new Date().toISOString().slice(0, 10);
-  if (user.last_order_date === today) {
-    const limit = VIP_LIMITS[user.vip_level] || 10;
-    if (user.daily_orders >= limit)
-      return res.status(429).json({
-        error: `နေ့စဉ် Limit (${limit}) ပြည့်ပြီ`,
-        limit_reached: true,
-        limit,
-        vip_level: user.vip_level,
-      });
-  } else {
-    user.daily_orders    = 0;
-    user.last_order_date = today;
+  // ── Race Condition Guard ────────────────────────────────────
+  if (grabLocks.has(uid)) {
+    return res.status(429).json({ error: "ခေတ္တစောင့်ပါ - Request လုပ်ဆောင်နေသည်", locked: true });
   }
+  grabLocks.add(uid);
 
-  const products = generateProducts();
-  // Select pool by VIP level
-  let pool;
-  if      (user.vip_level === 1) pool = products.lv1;
-  else if (user.vip_level === 2) pool = [...products.lv1, ...products.lv2];
-  else if (user.vip_level === 3) pool = [...products.lv1, ...products.lv2, ...products.lv3];
-  else                           pool = [...products.lv1, ...products.lv2, ...products.lv3, ...products.lv4];
+  try {
+    const user = await dbGetUser(uid);
+    if (!user)       { grabLocks.delete(uid); return res.status(404).json({ error: "User မတွေ့ပါ" }); }
+    if (user.banned) { grabLocks.delete(uid); return res.status(403).json({ error: "အကောင့် ပိတ်ဆို့ထားသည်" }); }
+    if (!user.vip_level) { grabLocks.delete(uid); return res.status(403).json({ error: "VIP ဝယ်ယူမှသာ Grab လုပ်နိုင်" }); }
 
-  const product = pool[Math.floor(Math.random() * pool.length)];
+    // ── Daily Limit ─────────────────────────────────────────
+    const today = new Date().toISOString().slice(0, 10);
+    if (user.last_order_date === today) {
+      const limit = VIP_LIMITS[user.vip_level] || 10;
+      if (user.daily_orders >= limit) {
+        grabLocks.delete(uid);
+        return res.status(429).json({
+          error: `နေ့စဉ် Limit (${limit}) ပြည့်ပြီ`,
+          limit_reached: true, limit, vip_level: user.vip_level,
+        });
+      }
+    } else {
+      user.daily_orders    = 0;
+      user.last_order_date = today;
+    }
 
-  if (user.balance < product.price)
-    return res.status(400).json({
-      success: false, insufficient: true,
-      required: product.price, current_balance: user.balance,
-      shortfall: product.price - user.balance,
-      error: `Balance မလုံပါ (ဈေး: ${product.price.toLocaleString()} ကျပ်)`,
-      product_preview: { id: product.id, name: product.name, price: product.price },
+    // ── Product Selection ───────────────────────────────────
+    const products = generateProducts();
+    let pool;
+    if      (user.vip_level === 1) pool = products.lv1;
+    else if (user.vip_level === 2) pool = [...products.lv1, ...products.lv2];
+    else if (user.vip_level === 3) pool = [...products.lv1, ...products.lv2, ...products.lv3];
+    else                           pool = [...products.lv1, ...products.lv2, ...products.lv3, ...products.lv4];
+
+    const product = pool[Math.floor(Math.random() * pool.length)];
+
+    // ── v8: Balance CHECK only (threshold) — မနှုတ် ─────────
+    if (user.balance < product.price) {
+      grabLocks.delete(uid);
+      return res.status(400).json({
+        success: false, insufficient: true,
+        required: product.price, current_balance: user.balance,
+        shortfall: product.price - user.balance,
+        error: "ပစ္စည်းဝယ်ယူရန် လက်ကျန်ငွေ မလုံလောက်ပါ၊ ငွေထပ်ဖြည့်ပါ",
+        product_preview: { id: product.id, name: product.name, price: product.price },
+      });
+    }
+
+    // ── Commission only — balance မနှုတ် ────────────────────
+    const commission = product.commission;
+    user.balance      += commission;    // Commission ပဲ ထည့်
+    user.commission   += commission;
+    user.total_grab_count = (user.total_grab_count || 0) + 1;
+    user.daily_orders += 1;
+
+    // ── Grab History: max 20 per user (storage optimization) ─
+    if (!user.grabHist) user.grabHist = [];
+    user.grabHist.unshift({
+      pid: product.id,
+      pn:  product.name.substring(0, 25),
+      cm:  commission,
+      ca:  new Date().toISOString().slice(0, 16),
+    });
+    if (user.grabHist.length > 20) user.grabHist.length = 20;
+
+    await dbSetUser(user);
+
+    // ── Save to TTL collection (auto-delete 3 days) ──────────
+    if (db) {
+      db.collection("grab_history").insertOne({
+        uid, pid: product.id, cm: commission, ca: new Date(),
+      }).catch(e => console.log("grab_history:", e.message));
+    }
+
+    grabLocks.delete(uid);
+    return res.json({
+      success: true, product, commission,
+      new_balance:  user.balance,
+      daily_orders: user.daily_orders,
+      total_grabs:  user.total_grab_count,
     });
 
-  const commission  = product.commission;
-  user.balance     -= product.price;
-  user.balance     += commission;
-  user.commission  += commission;
-  user.daily_orders += 1;
-  await dbSetUser(user);
-
-  res.json({ success: true, product, commission, new_balance: user.balance, daily_orders: user.daily_orders });
+  } catch (err) {
+    grabLocks.delete(uid);
+    console.error("Grab error:", err.message);
+    return res.status(500).json({ error: "Server error" });
+  }
 });
 
 // ─── My Invitation ────────────────────────────────
