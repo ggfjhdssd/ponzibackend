@@ -474,6 +474,57 @@ bot.onText(/\/stats/, async (msg) => {
   ).catch(err => console.log("Telegram Send Error:", err.message));
 });
 
+// ─── Admin: /totalusers ───────────────────────────
+// Bot ကို /start လုပ်ထားသော User အားလုံး၏ အသေးစိတ် Statistics
+bot.onText(/\/totalusers/, async (msg) => {
+  if (!ADMIN_IDS.includes(msg.from.id))
+    return bot.sendMessage(msg.chat.id, "❌ Admin သာ သုံးနိုင်သည်")
+      .catch(err => console.log("Telegram Send Error:", err.message));
+
+  const users = await dbGetAllUsers();
+  const now   = Date.now();
+
+  const total     = users.length;
+  const banned    = users.filter(u => u.banned).length;
+  const active    = users.filter(u => !u.banned).length;
+  const noVip     = users.filter(u => !u.vip_level || u.vip_level === 0).length;
+  const vip1      = users.filter(u => u.vip_level === 1).length;
+  const vip2      = users.filter(u => u.vip_level === 2).length;
+  const vip3      = users.filter(u => u.vip_level === 3).length;
+  const vip4      = users.filter(u => u.vip_level === 4).length;
+  const last7d    = users.filter(u => u.last_seen && (now - new Date(u.last_seen).getTime()) < 7*24*60*60*1000).length;
+  const today     = new Date().toISOString().slice(0, 10);
+  const todayGrab = users.filter(u => u.last_order_date === today).length;
+  const deposited = users.filter(u => (u.total_deposited || 0) > 0).length;
+  const totalBal  = users.reduce((s, u) => s + (u.balance || 0), 0);
+  const totalComm = users.reduce((s, u) => s + (u.commission || 0), 0);
+  const totalDep  = users.reduce((s, u) => s + (u.total_deposited || 0), 0);
+  const newest    = [...users].sort((a, b) => new Date(b.joined_at || 0) - new Date(a.joined_at || 0))[0];
+  const newestTxt = newest ? `@${newest.username || newest.first_name || newest.telegram_id} (${(newest.joined_at || "").slice(0, 10)})` : "-";
+
+  bot.sendMessage(msg.chat.id,
+    `👥 Total Users Report\n` +
+    `━━━━━━━━━━━━━━━━━━━━\n` +
+    `📊 စုစုပေါင်း Users      : ${total} ဦး\n` +
+    `✅ Active (Ban မပါ)     : ${active} ဦး\n` +
+    `🚫 Banned               : ${banned} ဦး\n` +
+    `💳 ငွေသွင်းဖူးသူ         : ${deposited} ဦး\n\n` +
+    `💎 VIP Breakdown:\n` +
+    `   No VIP : ${noVip} ဦး\n` +
+    `   VIP-1  : ${vip1} ဦး\n` +
+    `   VIP-2  : ${vip2} ဦး\n` +
+    `   VIP-3  : ${vip3} ဦး\n` +
+    `   VIP-4  : ${vip4} ဦး\n\n` +
+    `📅 ၇ ရက်အတွင်း Active   : ${last7d} ဦး\n` +
+    `🛒 ယနေ့ Grab လုပ်သူ     : ${todayGrab} ဦး\n\n` +
+    `💰 Balance စုစုပေါင်း    : ${totalBal.toLocaleString()} ကျပ်\n` +
+    `📈 Commission စုစုပေါင်း : ${totalComm.toLocaleString()} ကျပ်\n` +
+    `💵 Deposit စုစုပေါင်း    : ${totalDep.toLocaleString()} ကျပ်\n` +
+    `━━━━━━━━━━━━━━━━━━━━\n` +
+    `🆕 နောက်ဆုံးဝင်သူ       : ${newestTxt}`
+  ).catch(err => console.log("Telegram Send Error:", err.message));
+});
+
 // Fix 4: Polling error with detailed log
 bot.on("polling_error", (err) => {
   console.error("Polling error code:", err.code, "| message:", err.message);
